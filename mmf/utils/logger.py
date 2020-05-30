@@ -1,9 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+
 import collections
 import json
 import logging
 import os
 import sys
+from typing import Type
 
 from mmf.utils.configuration import get_mmf_env
 from mmf.utils.distributed import is_master
@@ -47,37 +49,48 @@ class Logger:
             name = __name__
         self.logger = logging.getLogger(name)
         self._file_only_logger = logging.getLogger(name)
-        warnings_logger = logging.getLogger("py.warnings")
+        self.warnings_logger = logging.getLogger("py.warnings")
 
         # Set level
         level = config.training.logger_level
         self.logger.setLevel(getattr(logging, level.upper()))
         self._file_only_logger.setLevel(getattr(logging, level.upper()))
 
+        # Capture stdout to logger
+        self.stdout_logger = StreamToLogger(
+            logging.getLogger("stdout"), getattr(logging, level.upper())
+        )
+        sys.stdout = self.stdout_logger
+
         formatter = logging.Formatter(
-            "%(asctime)s %(levelname)s: %(message)s", datefmt="%Y-%m-%dT%H:%M:%S"
+            "%(asctime)s | %(levelname)s | %(name)s : %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
         )
 
         # Add handler to file
         channel = logging.FileHandler(filename=self.log_filename, mode="a")
         channel.setFormatter(formatter)
+        self.add_handlers(channel)
 
-        self.logger.addHandler(channel)
-        self._file_only_logger.addHandler(channel)
-        warnings_logger.addHandler(channel)
-
-        # Add handler to stdout
-        channel = logging.StreamHandler(sys.stdout)
+        # Add handler to train.log. train.log is full log that is also used
+        # by slurm/fbl output
+        channel = logging.FileHandler(
+            filename=os.path.join(self.save_dir, "train.log"), mode="a"
+        )
         channel.setFormatter(formatter)
-
-        self.logger.addHandler(channel)
-        warnings_logger.addHandler(channel)
+        self.add_handlers(channel)
 
         should_not_log = self.config.training.should_not_log
         self.should_log = not should_not_log
 
         # Single log wrapper map
         self._single_log_map = set()
+
+    def add_handlers(self, channel: Type[logging.Handler]):
+        self.logger.addHandler(channel)
+        self._file_only_logger.addHandler(channel)
+        self.warnings_logger.addHandler(channel)
+        self.stdout_logger.addHandler(channel)
 
     def write(self, x, level="info", donot_print=False, log_all=False):
         if self.logger is None:
@@ -123,6 +136,27 @@ class Logger:
             return
         else:
             self.write(x, level)
+
+
+class StreamToLogger:
+    """
+    Adapted from <https://fburl.com/2qkv0wq2>
+    Fake file-like stream object that redirects writes to a logger instance.
+    """
+
+    def __init__(self, logger: Type[logging.Logger], log_level: str = logging.INFO):
+        self.logger = logger
+        self.log_level = log_level
+
+    def addHandler(self, handler: Type[logging.Handler]):
+        self.logger.addHandler(handler)
+
+    def write(self, buf: str):
+        for line in buf.rstrip().splitlines():
+            self.logger.log(self.log_level, line.rstrip())
+
+    def flush(self):
+        pass
 
 
 class TensorboardLogger:

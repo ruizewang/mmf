@@ -30,9 +30,10 @@ def main(configuration, init_distributed=False, predict=False):
     registry.register("seed", config.training.seed)
     print(f"Using seed {config.training.seed}")
 
-    registry.register("writer", Logger(config, name="mmf.train"))
-
     trainer = build_trainer(configuration)
+
+    # Logger should be registered after config is registered in build_trainer
+    registry.register("writer", Logger(config, name="mmf.train"))
     trainer.load()
     if predict:
         trainer.inference()
